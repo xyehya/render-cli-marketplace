@@ -2,7 +2,7 @@
   "name": "render-cli",
   "description": "Deploy apps to Render.com using the CLI v2 and REST API. Covers PostgreSQL provisioning, env-var wiring, deploy triggering, log tailing, and real-world gotchas.",
   "version": "1.0.0",
-  "author": "Yehya Karout",
+  "author": {"name": "Yehya Karout", "email": "yehya.karout@gmail.com"},
   "license": "MIT",
   "keywords": ["render", "deploy", "hosting", "postgresql", "node", "cli", "devops"]
 }
