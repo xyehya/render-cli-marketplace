@@ -4,7 +4,8 @@ description: |
   How to deploy apps to Render.com using the Render CLI v2 and Render REST API.
   Use this skill whenever the user wants to deploy to Render, create a Render service
   or database, set environment variables on Render, trigger a Render deploy, check
-  deploy status/logs, or troubleshoot a Render deployment — even if they just say
+  deploy status/logs, SSH into a service, connect to a database via psql,
+  or troubleshoot a Render deployment — even if they just say
   "host it on Render", "deploy to Render", or "I want to put this on Render".
   Also covers render.yaml authoring and key gotchas discovered in real deployments.
 ---
@@ -15,20 +16,113 @@ description: |
 
 Deploy and manage apps on Render.com using the Render CLI v2 and the Render REST API.
 Covers everything from first auth check to a live URL: PostgreSQL provisioning,
-env-var wiring, deploy triggering, and log tailing.
+env-var wiring, deploy triggering, log tailing, SSH access, and psql sessions.
 
 ## Quick Reference
 
-| Need | Command / Endpoint |
-|------|-------------------|
+| Need | Command |
+|------|---------|
 | Auth check | `render whoami --output json` |
 | List workspaces | `render workspaces --output json` |
 | Set workspace | `render workspace set <id>` |
+| List all services | `render services --output json --confirm` |
+| List deploy history | `render deploys list <srv-id> --output json --confirm` |
+| Trigger deploy (wait) | `render deploys create <srv-id> --wait --output text --confirm` |
+| Deploy specific commit | `render deploys create <srv-id> --commit <sha> --confirm` |
+| Deploy Docker image | `render deploys create <srv-id> --image <url> --confirm` |
 | Tail logs | `render logs -r <srv-id> --output text --confirm --limit 60` |
+| SSH into service | `render ssh <srv-id> --confirm` |
+| Ephemeral shell | `render ssh <srv-id> --ephemeral --confirm` |
+| Connect to DB (psql) | `render psql <dpg-id> --confirm` |
+| Run DB query | `render psql <dpg-id> -c "SELECT version();" --confirm` |
 | Validate render.yaml | `render blueprints validate --output json` |
 | API key | `cat ~/.render-api` |
 | DB connection string | `GET /v1/postgres/{dpg-id}/connection-info` |
 | Get owner ID | `GET /v1/owners?limit=1` |
+
+---
+
+## Native CLI Commands
+
+These commands work directly via the CLI without needing curl/REST calls.
+
+### services
+
+```bash
+# List all services and datastores in the active workspace
+render services --output json --confirm
+
+# Interactive mode (lets you select a service to deploy, tail logs, or SSH)
+render services
+```
+
+### deploys
+
+```bash
+# List deploy history for a service
+render deploys list <srv-id> --output json --confirm
+
+# Trigger a new deploy and block until it finishes (non-zero exit on failure)
+render deploys create <srv-id> --wait --output text --confirm
+
+# Deploy a specific git commit (Git-backed services)
+render deploys create <srv-id> --commit <sha> --confirm
+
+# Deploy a specific Docker image (image-backed services)
+render deploys create <srv-id> --image <docker-image-url> --confirm
+```
+
+Deploy statuses: `build_in_progress` → `update_in_progress` → `live` ✓ or `update_failed` ✗
+
+### psql
+
+```bash
+# Open interactive psql session to a Postgres database
+render psql <dpg-id> --confirm
+
+# Run a single query and exit
+render psql <dpg-id> --command "SELECT * FROM users LIMIT 5;" --confirm
+
+# Output query results as JSON
+render psql <dpg-id> -c "SELECT * FROM users;" --output json --confirm
+
+# Pass extra psql flags (e.g. CSV output)
+render psql <dpg-id> --confirm -- --csv
+```
+
+### ssh
+
+```bash
+# SSH into a running service instance
+render ssh <srv-id> --confirm
+
+# Ephemeral shell — isolated, does NOT run the service start command
+# Useful for one-off debugging without affecting the running service
+render ssh <srv-id> --ephemeral --confirm
+```
+
+### skills (manage Claude Code agent skills)
+
+```bash
+render skills list
+render skills install
+render skills update
+render skills remove
+```
+
+---
+
+## Global Flags & Environment Variables
+
+| Flag / Env Var | Purpose |
+|----------------|---------|
+| `-o` / `--output` | Output format: `json`, `yaml`, `text`, `interactive` |
+| `--confirm` | Skip all confirmation prompts (required for non-interactive use) |
+| `RENDER_API_KEY` | API key for auth — alternative to `render login` |
+| `RENDER_OUTPUT` | Sets the default output format for all commands |
+| `RENDER_CLI_CONFIG_PATH` | Path to a custom CLI config file |
+
+> When scripting, always pass `--output json --confirm` to avoid interactive prompts.
 
 ---
 
@@ -57,6 +151,7 @@ RENDER_API_KEY=$(cat ~/.render-api)
 ```
 
 All REST calls use `Authorization: Bearer $RENDER_API_KEY`.
+Alternatively, set `export RENDER_API_KEY=$(cat ~/.render-api)` so the CLI picks it up automatically.
 
 ### 3. Push Code to GitHub
 
@@ -126,6 +221,12 @@ Response fields:
 - `password` — the generated password
 - `psqlCommand` — ready-to-paste psql invocation
 
+Or connect directly via CLI:
+
+```bash
+render psql $DB_ID --confirm
+```
+
 ### 8. Create the Web Service
 
 ```bash
@@ -177,6 +278,10 @@ curl -s -X PUT "https://api.render.com/v1/services/$SERVICE_ID/env-vars" \
 ### 10. Trigger a Deploy
 
 ```bash
+# CLI — blocks until live, non-zero exit on failure (preferred)
+render deploys create $SERVICE_ID --wait --output text --confirm
+
+# REST API alternative
 curl -s -X POST "https://api.render.com/v1/services/$SERVICE_ID/deploys" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
@@ -190,13 +295,14 @@ curl -s -X POST "https://api.render.com/v1/services/$SERVICE_ID/deploys" \
 # CLI log tail (best for watching in real-time)
 render logs -r $SERVICE_ID --output text --confirm --limit 60
 
+# CLI deploy history
+render deploys list $SERVICE_ID --output json --confirm
+
 # API poll for deploy status
 curl -s "https://api.render.com/v1/services/$SERVICE_ID/deploys?limit=1" \
   -H "Authorization: Bearer $RENDER_API_KEY" | \
   python3 -c "import sys,json; print(json.load(sys.stdin)[0]['deploy']['status'])"
 ```
-
-Deploy statuses: `build_in_progress` → `update_in_progress` → `live` ✓ or `update_failed` ✗
 
 ---
 
@@ -211,6 +317,7 @@ Deploy statuses: `build_in_progress` → `update_in_progress` → `live` ✓ or 
 | `404` on `/connection-string` | Wrong endpoint | Use `/connection-info` |
 | `"missing environment variable value"` | `fromDatabase` format | Use literal value string |
 | IP allowlist PUT seems to work but doesn't apply | Silent no-op | Verify with a GET after; the endpoint may not support all fields |
+| CLI prompts hang in scripts | Interactive mode triggered | Always pass `--confirm` and `--output json/text` |
 
 ---
 
